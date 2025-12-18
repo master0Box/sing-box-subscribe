@@ -1,4 +1,4 @@
-import json, os, tool, time, requests, sys, importlib, argparse, yaml, ruamel.yaml
+import json, os, tool, time, sys, importlib, argparse, yaml, ruamel.yaml, requests
 import re
 from datetime import datetime
 from urllib.parse import urlparse
@@ -631,3 +631,4 @@ if __name__ == '__main__':
         final_config = combin_to_config(config, nodes)  # 节点信息添加到模板
     save_config(providers["save_config_path"], final_config)
     # updateLocalConfig('http://127.0.0.1:9090',providers['save_config_path'])
+
