@@ -1,5 +1,4 @@
 paramiko
-requests
 scp
 chardet
 PyYAML
