@@ -5,6 +5,8 @@ name = "pypi"
  
 [packages]
 flask = "*"
+pyyaml = "*"
+"ruamel.yaml" = "*"
  
 [requires]
 python_version = "3.12"
