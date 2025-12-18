@@ -1,4 +1,4 @@
-import base64,requests,random,string,re,chardet,urllib.parse
+import base64,random,string,re,chardet,urllib.parse,requests
 import warnings
 from cryptography.utils import CryptographyDeprecationWarning
 with warnings.catch_warnings(action="ignore", category=CryptographyDeprecationWarning):
@@ -334,3 +334,4 @@ class ConfigSSH:
 
     def close(self):
         self.ssh.close()
+
