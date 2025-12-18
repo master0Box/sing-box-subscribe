@@ -5,6 +5,10 @@ name = "pypi"
  
 [packages]
 flask = "*"
+requests = "*"
+chardet = "*"
+paramiko = "*"
+scp = "*"
 pyyaml = "*"
 "ruamel.yaml" = "*"
  
