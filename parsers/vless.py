@@ -35,8 +35,8 @@ def parse(data):
     
     packet_encoding = netquery.get('packetEncoding', '').lower()
 
-if packet_encoding in ['xudp', 'packetaddr']:
-    node['packet_encoding'] = packet_encoding
+    if packet_encoding in ['xudp', 'packetaddr']:
+        node['packet_encoding'] = packet_encoding
     
     if netquery.get('flow'):
         node['flow'] = 'xtls-rprx-vision'
