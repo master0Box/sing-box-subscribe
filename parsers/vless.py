@@ -30,9 +30,13 @@ def parse(data):
         'type': 'vless',
         'server': server,
         'server_port': server_port,
-        'uuid': _netloc[0].split(':', 1)[-1],
-        'packet_encoding': netquery.get('packetEncoding', 'xudp')
+        'uuid': _netloc[0].split(':', 1)[-1]
     }
+    
+    packet_encoding = netquery.get('packetEncoding', '').lower()
+
+if packet_encoding in ['xudp', 'packetaddr']:
+    node['packet_encoding'] = packet_encoding
     
     if netquery.get('flow'):
         node['flow'] = 'xtls-rprx-vision'
