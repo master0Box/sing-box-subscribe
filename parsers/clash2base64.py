@@ -263,55 +263,246 @@ def clash2v2ray(original_share_link):
             link += f"#{trojan_info['name']}"
         return link
         # TODO
-    elif share_link['type'] == 'vless':
-        vless_info = {
-            "uuid": share_link['uuid'],
-            "server": share_link['server'],
-            "port": share_link['port'],
-            "sni": share_link.get('servername', share_link.get('sni')),
-            "fp": share_link.get('client-fingerprint', ''),
-            "type": share_link.get('network', 'tcp'),
-            "flow": share_link.get('flow', ''),
-            'allowInsecure': '1' if share_link.get('skip-cert-verify') == True else '0',
-            "name": quote(share_link['name'], 'utf-8')
+    elif share_link.get('type') == 'vless':
+        """
+        Clash/Mihomo VLESS -> VLESS share link.
+    
+        目标：
+            vless.py -> sing-box 1.14.x
+    
+        原则：
+            1. 不把 XHTTP 伪装成 HTTP/WS
+            2. 保留 TLS / Reality / uTLS / ALPN / flow
+            3. 保留 packet-encoding
+            4. 正确编码 URI 参数
+            5. IPv6 正确加 []
+        """
+    
+        network = str(share_link.get('network', 'tcp') or 'tcp').lower()
+    
+        # sing-box 1.14.x 无 XHTTP transport。
+        # 必须跳过，不能降级成 HTTP。
+        if network in ('xhttp', 'splithttp'):
+            return None
+    
+        # 本转换分支明确支持的网络类型。
+        if network not in ('tcp', 'ws', 'grpc'):
+            return None
+    
+        server = str(share_link.get('server', '')).strip()
+        if not server:
+            return None
+    
+        # IPv6：
+        # 2001:db8::1 -> [2001:db8::1]
+        if ':' in server and not server.startswith('['):
+            uri_server = f'[{server}]'
+        else:
+            uri_server = server
+    
+        uuid = str(share_link.get('uuid', '')).strip()
+        if not uuid:
+            return None
+    
+        try:
+            port = int(share_link.get('port'))
+        except (TypeError, ValueError):
+            return None
+    
+        if not 1 <= port <= 65535:
+            return None
+    
+        # --------------------------------------------------------
+        # TLS
+        # --------------------------------------------------------
+    
+        tls_enabled = bool(share_link.get('tls'))
+    
+        if not tls_enabled:
+            security = 'none'
+        else:
+            security = 'tls'
+    
+        reality_opts = share_link.get('reality-opts') or {}
+    
+        if reality_opts:
+            public_key = str(
+                reality_opts.get('public-key', '')
+            ).strip()
+    
+            short_id = str(
+                reality_opts.get('short-id', '')
+            ).strip()
+    
+            if not public_key:
+                return None
+    
+            if short_id and not re.fullmatch(
+                r'[0-9a-fA-F]{0,8}',
+                short_id
+            ):
+                return None
+    
+            security = 'reality'
+    
+        sni = (
+            share_link.get('servername')
+            or share_link.get('sni')
+            or ''
+        )
+    
+        fp = (
+            share_link.get('client-fingerprint')
+            or ''
+        )
+    
+        flow = (
+            share_link.get('flow')
+            or ''
+        )
+    
+        skip_cert_verify = (
+            share_link.get('skip-cert-verify') is True
+        )
+    
+        params = {
+            'encryption': 'none',
+            'security': security,
+            'sni': str(sni),
+            'fp': str(fp),
+            'type': network,
+            'flow': str(flow),
+            'allowInsecure': '1' if skip_cert_verify else '0',
         }
-        if share_link.get('tls') == False:
-            vless_info["security"] = 'none'
-        else:
-            vless_info["security"] = 'tls'
-        if vless_info['type'] == 'ws':
-            vless_info["path"] = quote(share_link['ws-opts'].get('path', ''), 'utf-8') if share_link.get('ws-opts') else share_link.get('ws-path', '')
-            vless_info["host"] = share_link['ws-opts'].get('headers', {}).get('Host', '') if share_link.get('ws-opts') else share_link.get('ws-headers', {}).get('Host', '')
-            link = "vless://{uuid}@{server}:{port}?encryption=none&security={security}&sni={sni}&fp={fp}&type={type}&host={host}&path={path}&flow={flow}&allowInsecure={allowInsecure}".format(**vless_info)
-        elif vless_info['type'] == 'grpc':
-            if share_link.get('grpc-opts', {}).get('grpc-service-name', '') not in ['/', ''] :
-                vless_info["serviceName"] = unquote(share_link.get('grpc-opts').get('grpc-service-name'))
-            else:
-                vless_info["serviceName"] = ''
-            if share_link.get('reality-opts'):
-                vless_info["security"] = 'reality'
-                vless_info["pbk"] = share_link['reality-opts']['public-key']
-                vless_info["sid"] = share_link.get('reality-opts', {}).get('short-id', '')
-                link = "vless://{uuid}@{server}:{port}?encryption=none&security={security}&sni={sni}&type={type}&serviceName={serviceName}&fp={fp}&flow={flow}&allowInsecure={allowInsecure}&pbk={pbk}&sid={sid}".format(**vless_info)
-            else:
-                link = "vless://{uuid}@{server}:{port}?encryption=none&security={security}&sni={sni}&type={type}&serviceName={serviceName}&fp={fp}&flow={flow}&allowInsecure={allowInsecure}".format(**vless_info)
-        elif vless_info['type'] == 'tcp':
-            if share_link.get('reality-opts'):
-                vless_info["security"] = 'reality'
-                vless_info["pbk"] = share_link['reality-opts']['public-key']
-                vless_info["sid"] = share_link.get('reality-opts', {}).get('short-id', '')
-                link = "vless://{uuid}@{server}:{port}?encryption=none&security={security}&sni={sni}&serverName={sni}&type={type}&fp={fp}&flow={flow}&allowInsecure={allowInsecure}&pbk={pbk}&sid={sid}".format(**vless_info)
-            else:
-                link = "vless://{uuid}@{server}:{port}?encryption=none&security={security}&sni={sni}&serverName={sni}&type={type}&fp={fp}&flow={flow}&allowInsecure={allowInsecure}".format(**vless_info)
-        if share_link.get('smux',{}).get('enabled', '') == True:
-            vless_info["protocol"] = share_link['smux']['protocol']
-            vless_info["max_connections"] = share_link['smux'].get('max-connections','')
-            vless_info["min_streams"] = share_link['smux'].get('min-streams','')
-            vless_info["max_streams"] = share_link['smux'].get('max-streams','')
-            vless_info["padding"] = share_link['smux'].get('padding','')
-            link += "&protocol={protocol}&max-connections={max_connections}&min-streams={min_streams}&max-streams={max_streams}&padding={padding}#{name}".format(**vless_info)
-        else:
-            link += f"#{vless_info['name']}"
+    
+        # --------------------------------------------------------
+        # 保留 packet-encoding
+        # --------------------------------------------------------
+    
+        packet_encoding = (
+            share_link.get('packet-encoding')
+            or share_link.get('packetEncoding')
+            or ''
+        )
+    
+        if packet_encoding:
+            params['packetEncoding'] = str(packet_encoding)
+    
+        # --------------------------------------------------------
+        # TLS ALPN
+        # --------------------------------------------------------
+    
+        alpn = share_link.get('alpn')
+    
+        if alpn:
+            params['alpn'] = alpn
+    
+        # --------------------------------------------------------
+        # Reality
+        # --------------------------------------------------------
+    
+        if reality_opts:
+            params['pbk'] = public_key
+    
+            if short_id:
+                params['sid'] = short_id
+    
+        # --------------------------------------------------------
+        # WebSocket
+        # --------------------------------------------------------
+    
+        if network == 'ws':
+            ws_opts = share_link.get('ws-opts') or {}
+    
+            path = (
+                ws_opts.get('path')
+                or share_link.get('ws-path')
+                or '/'
+            )
+    
+            headers = ws_opts.get('headers') or {}
+    
+            # Clash/Mihomo HTTP Header 不保证一定使用 Host 大小写。
+            host = ''
+            for key, value in headers.items():
+                if str(key).lower() == 'host':
+                    host = str(value)
+                    break
+    
+            params['path'] = path
+    
+            if host:
+                params['host'] = host
+    
+        # --------------------------------------------------------
+        # gRPC
+        # --------------------------------------------------------
+    
+        elif network == 'grpc':
+            grpc_opts = share_link.get('grpc-opts') or {}
+    
+            service_name = (
+                grpc_opts.get('grpc-service-name')
+                or ''
+            )
+    
+            if service_name in ('/', ''):
+                service_name = ''
+    
+            if service_name:
+                params['serviceName'] = service_name
+    
+        # --------------------------------------------------------
+        # TCP
+        # --------------------------------------------------------
+    
+        elif network == 'tcp':
+            pass
+    
+        # --------------------------------------------------------
+        # 统一构造 Query
+        # --------------------------------------------------------
+    
+        query = urlencode(
+            params,
+            doseq=True
+        )
+    
+        # --------------------------------------------------------
+        # Multiplex / SMUX
+        # --------------------------------------------------------
+    
+        smux = share_link.get('smux') or {}
+    
+        link = (
+            f'vless://'
+            f'{quote(uuid, safe="")}@'
+            f'{uri_server}:{port}?'
+            f'{query}'
+        )
+    
+        if smux.get('enabled') is True:
+            smux_params = {
+                'protocol': smux.get('protocol', ''),
+                'max-connections': smux.get('max-connections', ''),
+                'min-streams': smux.get('min-streams', ''),
+                'max-streams': smux.get('max-streams', ''),
+                'padding': smux.get('padding', ''),
+            }
+    
+            smux_params = {
+                key: value
+                for key, value in smux_params.items()
+                if value not in ('', None)
+            }
+    
+            if smux_params:
+                link += '&' + urlencode(smux_params)
+    
+        # Fragment 必须单独 URL encode。
+        name = str(share_link.get('name', '') or '')
+        link += '#' + quote(name, safe='')
+    
         return link
         # TODO
     elif share_link['type'] == 'tuic':
