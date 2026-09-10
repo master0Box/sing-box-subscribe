@@ -1,13 +1,95 @@
-import base64,json,re
+import base64
+import json
+import re
 from urllib.parse import quote, unquote
+
+
+def _is_true(value):
+    """严格解析 Clash boolean，避免字符串 'false' 被当成 True。"""
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _quote_uri(value):
+    """用于 URI userinfo/query/fragment 的完整 percent-encoding。"""
+    return quote(str(value), safe="")
+
+
+def _format_server(server):
+    """为 IPv6 server 补上 URI 要求的方括号。"""
+    server = str(server or "").strip()
+    if ":" in server and not (server.startswith("[") and server.endswith("]")):
+        return f"[{server}]"
+    return server
+
+
+def _first_port_from_spec(value):
+    """从 Clash ports 规范中取得第一个端口，仅用于 authority fallback。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    first = re.split(r"[,-]", text, maxsplit=1)[0].strip()
+    if first.isdigit():
+        port = int(first)
+        if 1 <= port <= 65535:
+            return port
+    return None
+
+
+def _format_alpn(value):
+    """统一 Clash 的 ALPN list/string 表示。"""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        values = [str(x).strip() for x in value if str(x).strip()]
+    else:
+        values = [x.strip() for x in str(value).split(",") if x.strip()]
+    # 保序去重
+    return ",".join(dict.fromkeys(values))
+
+
+def _format_port_list(value):
+    """统一 ports 为字符串；不擅自改变端口范围语义。"""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(x).strip() for x in value if str(x).strip())
+    return str(value).strip()
+
+
+def _format_bandwidth(value):
+    """将常见 Clash 带宽表示转换为 Hysteria2 URI 所需的整数 Mbps。"""
+    if value is None or str(value).strip() == "":
+        return ""
+    if isinstance(value, bool):
+        return ""
+    text = str(value).strip().lower()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(gbps|gbit|g|mbps|mbit|m|kbps|k)?", text)
+    if not m:
+        return ""
+    number = float(m.group(1))
+    unit = m.group(2) or "mbps"
+    factor = {"gbps": 1000, "gbit": 1000, "g": 1000,
+              "mbps": 1, "mbit": 1, "m": 1,
+              "kbps": 0.001, "k": 0.001}[unit]
+    mbps = number * factor
+    if mbps < 0:
+        return ""
+    # Hysteria2 URI extension expects integer Mbps.
+    return str(max(0, int(round(mbps))))
 
 def clash2v2ray(original_share_link):
     share_link = original_share_link.copy()
     link = ''
-    # 2. 协议兼容补丁：针对 Hysteria2/TUIC 只有 ports (端口跳跃) 无 port 的情况
+    # 端口 fallback 只在确实没有 port 时使用。
+    # Hysteria2 的完整 ports 会在专用分支中通过 mport 保留，不能在这里改写掉。
     if 'port' not in share_link and 'ports' in share_link:
-        first_port = str(share_link['ports']).replace(',', '-').split('-')[0]
-        share_link['port'] = int(first_port) if first_port.isdigit() else 443
+        first_port = _first_port_from_spec(share_link.get('ports'))
+        if first_port is not None:
+            share_link['port'] = first_port
     if share_link['type'] == 'vmess':
         try:
             vmess_info = {
@@ -264,42 +346,132 @@ def clash2v2ray(original_share_link):
         return link
         # TODO
     elif share_link['type'] == 'hysteria2':
-        # 1. 端口与多端口 (mport) 规范化处理
+        # ========================================================
+        # Clash Hysteria2 -> 标准 Hysteria2 URI
+        #
+        # 设计目标：
+        # 1. 保留完整 ports/mport，不让端口跳跃在中间层丢失；
+        # 2. 正确处理 IPv6；
+        # 3. 对 password / query / name 做 URI percent-encoding；
+        # 4. 不把字符串 "false" 当成 True；
+        # 5. 不输出无意义的 insecure=0；
+        # 6. ALPN 同时兼容 list/string。
+        # ========================================================
+
+        server = _format_server(share_link.get('server'))
+        if not server:
+            raise ValueError("Hysteria2 server is missing")
+
+        # Clash 中可能只有 ports，没有 port。
         base_port = share_link.get('port')
-        mport = share_link.get('ports', '')
-        if not base_port and mport:
-            first_port = str(mport).replace(',', '-').split('-')[0]
-            base_port = int(first_port) if first_port.isdigit() else 443
-            
-        # 2. ALPN 强健性处理 (兼容 List 和 String)
-        alpn_raw = share_link.get('alpn', '')
-        if isinstance(alpn_raw, list):
-            alpn_str = ','.join(alpn_raw)
-        else:
-            alpn_str = str(alpn_raw)
-            
-        # 3. 动态构建标准查询参数
-        params = {
-            "insecure": '1' if share_link.get('skip-cert-verify') else '0',
-            "obfs": share_link.get('obfs', ''),
-            "obfs-password": share_link.get('obfs-password', ''),
-            "pinSHA256": share_link.get('fingerprint', ''),
-            "sni": share_link.get('sni', ''),
-            "alpn": quote(alpn_str, 'utf-8'),
-            "mport": mport,
-            "upmbps": share_link.get('up', ''),
-            "downmbps": share_link.get('down', '')
-        }
-        
-        # 过滤掉空值和默认值(none)，保持 URI 纯净
-        query_string = '&'.join([f"{k}={v}" for k, v in params.items() if v and v != 'none'])
-        
-        auth = share_link.get('password', share_link.get('auth', ''))
-        server = share_link['server']
-        name = quote(share_link.get('name', 'Hysteria2_Node'), 'utf-8')
-        
-        # 4. 生成标准 Hysteria2 URI
-        link = f"hysteria2://{auth}@{server}:{base_port}?{query_string}#{name}"
+        if base_port in (None, ''):
+            base_port = _first_port_from_spec(share_link.get('ports'))
+        if base_port in (None, ''):
+            base_port = 443
+
+        try:
+            base_port = int(str(base_port))
+        except (TypeError, ValueError):
+            base_port = 443
+
+        if not 1 <= base_port <= 65535:
+            raise ValueError(f"Invalid Hysteria2 port: {base_port}")
+
+        ports = _format_port_list(share_link.get('ports'))
+
+        query_params = []
+
+        if _is_true(share_link.get('skip-cert-verify')):
+            query_params.append(("insecure", "1"))
+
+        obfs = str(share_link.get('obfs') or '').strip()
+        if obfs and obfs.lower() != 'none':
+            query_params.append(("obfs", obfs))
+            obfs_password = share_link.get('obfs-password',
+                                           share_link.get('obfs_password', ''))
+            if obfs_password not in (None, ''):
+                query_params.append(("obfs-password", obfs_password))
+
+        # Hysteria2 URI 的 fingerprint 语义是 pinSHA256。
+        # 下游 parser 会保留它，但不会错误映射成 sing-box public-key pin。
+        pin_sha256 = share_link.get(
+            'pinSHA256',
+            share_link.get('pin-sha256',
+                           share_link.get('fingerprint', ''))
+        )
+        if pin_sha256 not in (None, ''):
+            query_params.append(("pinSHA256", pin_sha256))
+
+        sni = share_link.get(
+            'sni',
+            share_link.get('servername',
+                           share_link.get('server-name', ''))
+        )
+        if sni not in (None, ''):
+            query_params.append(("sni", sni))
+
+        alpn = _format_alpn(share_link.get('alpn'))
+        if alpn:
+            query_params.append(("alpn", alpn))
+
+        # 使用扩展 mport 保持兼容；下游 hysteria2.py 会在需要时让
+        # mport 覆盖 authority 中仅用于 fallback 的 base_port。
+        if ports:
+            query_params.append(("mport", ports))
+
+        up_mbps = _format_bandwidth(
+            share_link.get('upmbps', share_link.get('up'))
+        )
+        down_mbps = _format_bandwidth(
+            share_link.get('downmbps', share_link.get('down'))
+        )
+        if up_mbps:
+            query_params.append(("upmbps", up_mbps))
+        if down_mbps:
+            query_params.append(("downmbps", down_mbps))
+
+        # 兼容部分机场直接下发的扩展参数。
+        extra_keys = (
+            ('hop_interval', ('hop_interval', 'hopInterval')),
+            ('hop_interval_max', ('hop_interval_max', 'hopIntervalMax')),
+            ('bbr_profile', ('bbr_profile', 'bbrProfile')),
+            ('brutal_debug', ('brutal_debug', 'brutalDebug')),
+            ('disable_chrome_parrot', ('disable_chrome_parrot', 'disableChromeParrot')),
+            ('network', ('network',)),
+            ('obfs-min-packet-size', ('obfs-min-packet-size', 'obfs_min_packet_size')),
+            ('obfs-max-packet-size', ('obfs-max-packet-size', 'obfs_max_packet_size')),
+        )
+
+        for query_name, keys in extra_keys:
+            value = None
+            for key in keys:
+                if share_link.get(key) not in (None, ''):
+                    value = share_link.get(key)
+                    break
+            if value not in (None, ''):
+                if query_name in {'brutal_debug', 'disable_chrome_parrot'}:
+                    value = '1' if _is_true(value) else '0'
+                query_params.append((query_name, value))
+
+        query_string = '&'.join(
+            f"{_quote_uri(key)}={_quote_uri(value)}"
+            for key, value in query_params
+            if value not in (None, '')
+        )
+
+        auth = share_link.get('password')
+        if auth in (None, ''):
+            auth = share_link.get('auth', '')
+        auth = _quote_uri(auth) if auth not in (None, '') else ''
+
+        name = share_link.get('name', 'Hysteria2_Node')
+        name = _quote_uri(name)
+
+        authority = f"{auth}@{server}:{base_port}" if auth else f"{server}:{base_port}"
+        link = f"hysteria2://{authority}"
+        if query_string:
+            link += f"?{query_string}"
+        link += f"#{name}"
         return link
         # TODO
     elif share_link['type'] == 'wireguard':
