@@ -1,5 +1,6 @@
 import re
 import ipaddress
+import hashlib
 from urllib.parse import urlsplit, parse_qs, unquote
 
 
@@ -742,7 +743,10 @@ def parse(data):
     ).strip()
 
     if not tag:
-        tag = tool.genName() + "_hysteria2"
+        # 不依赖外部 tool 模块，保证 parser 单独调用时也能工作；
+        # 同一 URI 始终生成稳定 tag。
+        digest = hashlib.sha256(data.encode("utf-8")).hexdigest()[:10]
+        tag = f"Hysteria2_{digest}"
 
     # --------------------------------------------------------
     # TLS
@@ -876,38 +880,32 @@ def parse(data):
     #
     # 仅当 URI 本身没有多端口时才使用。
     # --------------------------------------------------------
-    if (
-        server_ports is None
-        and port_spec is not None
-    ):
-        # URI 自身的端口优先。
-        pass
+    # mport 是某些转换器对端口跳跃的扩展表示。
+    # 若 authority 中只有一个 fallback 端口，而 mport 给出了完整端口范围，
+    # 必须使用 mport，否则会静默丢失端口跳跃。
+    #
+    # 若 authority 本身已经是多端口/范围，则 authority 优先。
+    mport_values = _all(
+        query,
+        "mport"
+    )
 
-    else:
-        mport_values = _all(
-            query,
-            "mport"
+    if mport_values and server_ports is None:
+        mport_spec = ",".join(mport_values)
+
+        mport_port, mport_ports = _parse_port_spec(
+            mport_spec
         )
 
-        if mport_values:
-
-            mport_spec = ",".join(
-                mport_values
+        if mport_ports is not None:
+            node["server_ports"] = mport_ports
+            node.pop(
+                "server_port",
+                None
             )
 
-            mport_port, mport_ports = _parse_port_spec(
-                mport_spec
-            )
-
-            if mport_ports is not None:
-                node["server_ports"] = mport_ports
-                node.pop(
-                    "server_port",
-                    None
-                )
-
-            elif mport_port is not None:
-                node["server_port"] = mport_port
+        elif mport_port is not None:
+            node["server_port"] = mport_port
 
     # --------------------------------------------------------
     # port hopping interval
