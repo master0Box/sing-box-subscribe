@@ -81,8 +81,11 @@ def _format_server(server):
 
     IPv6:
         2001:db8::1
-            ->
+        ->
         [2001:db8::1]
+
+    同时对 URI authority 中的特殊字符进行 percent-encoding，
+    防止 # ? @ 等字符改变 URI 结构。
     """
     if server is None:
         return ""
@@ -92,15 +95,17 @@ def _format_server(server):
     if not server:
         return ""
 
-    # 已经带 []
     if server.startswith("[") and server.endswith("]"):
-        return server
+        host = server
+    elif ":" in server:
+        host = f"[{server}]"
+    else:
+        host = server
 
-    # URI authority 中 IPv6 必须使用 []
-    if ":" in server:
-        return f"[{server}]"
-
-    return server
+    return quote(
+        host,
+        safe="[]:",
+    )
 
 
 def _parse_port(value, default=None):
@@ -1781,9 +1786,11 @@ def clash2v2ray(original_share_link):
         server = _format_server(
             share_link.get("server")
         )
-
+        
         if not server:
             return None
+
+        server = _quote_uri_host(server)
 
         port = _parse_port(
             share_link.get("port")
