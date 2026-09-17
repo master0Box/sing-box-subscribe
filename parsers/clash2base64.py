@@ -48,6 +48,29 @@ def _quote_uri(value):
         safe="",
     )
 
+def _quote_uri_host(server):
+    """
+    将 Clash/Mihomo 的 server 安全放入 URI authority。
+
+    允许：
+        IPv6 的 []:
+    
+    其余 URI 保留字符全部 percent-encode，
+    防止 # ? @ 等字符破坏 authority 结构。
+    """
+    if server is None:
+        return ""
+
+    server = str(server).strip()
+
+    if not server:
+        return ""
+
+    return quote(
+        server,
+        safe="[]:",
+    )
+
 def _format_server(server):
     """
     将服务器地址转换成 URI authority 中的正确形式。
