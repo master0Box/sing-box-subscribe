@@ -76,15 +76,25 @@ def _add_tls(node, query):
     security = (_clean(_value(query, "security")) or "").lower()
     tls_flag = str(_value(query, "tls", "")).lower()
 
-    if security in ("", "none", "false", "0") and tls_flag not in ("1", "true", "yes"):
+    if security in ("", "none", "false", "0") and tls_flag not in (
+        "1",
+        "true",
+        "yes",
+    ):
         return True
 
-    if security not in ("", "tls", "reality") and tls_flag not in ("1", "true", "yes"):
+    if security not in ("", "tls", "reality") and tls_flag not in (
+        "1",
+        "true",
+        "yes",
+    ):
         return False
 
     tls = {
         "enabled": True,
-        "insecure": str(_value(query, "allowInsecure", "0")).lower() in ("1", "true", "yes")
+        "insecure": str(
+            _value(query, "allowInsecure", "0")
+        ).lower() in ("1", "true", "yes")
     }
 
     server_name = _clean(
@@ -102,28 +112,57 @@ def _add_tls(node, query):
         tls["alpn"] = alpn
 
     fingerprint = _clean(_value(query, "fp"))
-    if fingerprint:
-        tls["utls"] = {
-            "enabled": True,
-            "fingerprint": fingerprint
-        }
 
     public_key = _clean(_value(query, "pbk"))
-    short_id = _clean(_value(query, "sid", _value(query, "shortId", None)))
-    reality_requested = security == "reality" or public_key is not None
+    short_id = _clean(
+        _value(query, "sid", _value(query, "shortId", None))
+    )
+
+    reality_requested = (
+        security == "reality"
+        or public_key is not None
+    )
 
     if reality_requested:
         if not public_key:
             return False
-        if short_id is not None and not re.fullmatch(r"[0-9a-fA-F]{0,16}", short_id):
-            return False
+
+        if short_id is not None:
+            if not re.fullmatch(
+                r"[0-9a-fA-F]{0,16}",
+                short_id
+            ):
+                return False
+
+            # Reality short_id 必须是完整字节的十六进制表示
+            if len(short_id) % 2 != 0:
+                return False
+
+        # sing-box 1.14.0 的 Reality client 必须启用 uTLS。
+        # fingerprint 为空时，sing-box 默认使用 chrome。
+        tls["utls"] = {
+            "enabled": True
+        }
+
+        if fingerprint:
+            tls["utls"]["fingerprint"] = fingerprint
+
         reality = {
             "enabled": True,
             "public_key": public_key
         }
+
         if short_id:
             reality["short_id"] = short_id
+
         tls["reality"] = reality
+
+    elif fingerprint:
+        # 普通 TLS + fp
+        tls["utls"] = {
+            "enabled": True,
+            "fingerprint": fingerprint
+        }
 
     node["tls"] = tls
     return True
