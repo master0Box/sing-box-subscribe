@@ -1307,19 +1307,21 @@ def clash2v2ray(original_share_link):
         ).strip().lower()
 
         # 不能将 XHTTP 错误降级为 WS / HTTP。
+        # XHTTP / SplitHTTP 当前不能伪装成 HTTP / WS。
         if network in {
             "xhttp",
             "splithttp",
         }:
             return None
-
+        
         if network not in {
             "tcp",
             "ws",
+            "http",
+            "h2",
             "grpc",
         }:
             return None
-
         server = str(
             share_link.get(
                 "server",
@@ -1406,9 +1408,9 @@ def clash2v2ray(original_share_link):
             # Reality shortId 为十六进制，最大 8 字节。
             if short_id:
                 if not re.fullmatch(r"[0-9a-fA-F]{0,16}", short_id):
-                    return False
+                    return None
                 if len(short_id) % 2 != 0:
-                    return False
+                    return None
 
             security = "reality"
 
@@ -1500,7 +1502,130 @@ def clash2v2ray(original_share_link):
         # WebSocket
         # --------------------------------------------------------
 
-        if network == "ws":
+                # --------------------------------------------------------
+        # HTTP / H2
+        # --------------------------------------------------------
+        if network in ("http", "h2"):
+            opts_key = (
+                "http-opts"
+                if network == "http"
+                else "h2-opts"
+            )
+
+            transport_opts = (
+                share_link.get(opts_key, {})
+                or {}
+            )
+
+            if not isinstance(transport_opts, dict):
+                return None
+
+            # --------------------------------------------
+            # host
+            # Mihomo 可以是：
+            #   host: example.com
+            #   host:
+            #     - example.com
+            #     - cdn.example.com
+            #
+            # 中间 URI 使用逗号分隔，
+            # vless.py 再还原成 list。
+            # --------------------------------------------
+            host = transport_opts.get("host", "")
+
+            if isinstance(host, (list, tuple)):
+                host_values = [
+                    str(x).strip()
+                    for x in host
+                    if str(x).strip()
+                ]
+                host = ",".join(host_values)
+            else:
+                host = str(host or "").strip()
+
+            # --------------------------------------------
+            # path
+            # vless.py 当前使用单值 path。
+            # HTTP 如果配置多个 path，无法通过当前
+            # URI 中间格式无损表达，因此直接跳过，
+            # 不静默丢失语义。
+            # --------------------------------------------
+            path = transport_opts.get("path", "")
+
+            if isinstance(path, (list, tuple)):
+                path_values = [
+                    str(x).strip()
+                    for x in path
+                    if str(x).strip()
+                ]
+
+                if len(path_values) > 1:
+                    return None
+
+                path = (
+                    path_values[0]
+                    if path_values
+                    else ""
+                )
+            else:
+                path = str(path or "").strip()
+
+            if host:
+                params["host"] = host
+
+            if path:
+                params["path"] = path
+
+            # HTTP transport 可以指定 method
+            if network == "http":
+                method = str(
+                    transport_opts.get("method", "")
+                    or ""
+                ).strip()
+
+                if method:
+                    params["method"] = method
+
+                # 当前 URI 中间格式没有通用 headers 字段。
+                # 只安全保留 Host，其余 header 不静默丢弃。
+                headers = (
+                    transport_opts.get("headers", {})
+                    or {}
+                )
+
+                if not isinstance(headers, dict):
+                    return None
+
+                for key in headers:
+                    if str(key).lower() != "host":
+                        return None
+
+                if not host:
+                    header_host = ""
+                    for key, value in headers.items():
+                        if str(key).lower() != "host":
+                            continue
+
+                        if isinstance(value, (list, tuple)):
+                            if len(value) != 1:
+                                return None
+                            header_host = str(
+                                value[0]
+                            ).strip()
+                        else:
+                            header_host = str(
+                                value
+                            ).strip()
+
+                        break
+
+                    if header_host:
+                        params["host"] = header_host
+
+        # --------------------------------------------------------
+        # WebSocket
+        # --------------------------------------------------------
+        elif network == "ws":
             ws_opts = (
                 share_link.get(
                     "ws-opts",
