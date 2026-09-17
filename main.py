@@ -154,9 +154,10 @@ def get_nodes(url):
     # print (content)
     if type(content) == dict:
         if 'proxies' in content:
-            share_links = []
+            share_links = []            
             for proxy in content['proxies']:
-                share_links.append(clash2v2ray(proxy))
+                link = clash2v2ray(proxy)
+                    share_links.append(link)            
             data = '\n'.join(share_links)
             data = parse_content(data)
             processed_list = []
@@ -303,7 +304,11 @@ def get_content_form_file(url):
         yaml_data = dict(yaml.safe_load(content))
         share_links = []
         for proxy in yaml_data['proxies']:
-            share_links.append(clash2v2ray(proxy))
+            link = clash2v2ray(proxy)
+        
+            if isinstance(link, str) and link.strip():
+                share_links.append(link)
+        
         node = '\n'.join(share_links)
         processed_list = tool.noblankLine(node)
         return processed_list
