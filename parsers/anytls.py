@@ -40,13 +40,13 @@ def _parse_port(parsed):
         ) from exc
 
     if port is None:
-        raise ValueError("AnyTLS port is missing")
+        # AnyTLS URI omitting the port defaults to 443.
+        port = 443
 
     if not 1 <= port <= 65535:
         raise ValueError(f"Invalid AnyTLS port: {port}")
 
     return port
-
 
 def _parse_server(parsed):
     """Return normalized hostname, including IPv6 without brackets."""
@@ -61,20 +61,33 @@ def _parse_server(parsed):
 def _parse_password(parsed, query):
     """
     Prefer ?auth=... when present.
-    Otherwise use URI userinfo password.
+
+    AnyTLS standard URI:
+        anytls://<auth>@host:port
+
+    The auth value is stored in the URI username field,
+    not the URI password field.
     """
     password = _first_query_value(query, "auth")
 
     if password == "":
-        password = parsed.password or ""
+        # Standard AnyTLS URI:
+        # anytls://password@example.com:443
+        #
+        # urlparse() keeps percent-encoding in username,
+        # so decode it exactly once here.
+        if parsed.username is not None:
+            password = unquote(parsed.username)
 
-    password = unquote(password)
+        # Keep compatibility with a non-standard
+        # user:password@host form.
+        elif parsed.password is not None:
+            password = unquote(parsed.password)
 
     if password == "":
         raise ValueError("AnyTLS password is missing")
 
     return password
-
 
 def parse(data):
     if not isinstance(data, str):
